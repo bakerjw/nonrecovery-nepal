@@ -1,0 +1,16 @@
+# packages to be installed if not already
+install.packages("sp", repos='http://cran.us.r-project.org')
+install.packages("raster", repos='http://cran.us.r-project.org')
+install.packages("ggplot2", repos='http://cran.us.r-project.org')
+install.packages("dplyr", repos='http://cran.us.r-project.org')
+install.packages("gridExtra", repos='http://cran.us.r-project.org')
+install.packages("rasterVis", repos='http://cran.us.r-project.org')
+install.packages("iml", repos='http://cran.us.r-project.org')
+
+install.packages("foreach", repos='http://cran.us.r-project.org')
+install.packages("future", repos='http://cran.us.r-project.org')
+install.packages("doFuture", repos='http://cran.us.r-project.org')
+install.packages("ranger", repos='http://cran.us.r-project.org')
+install.packages("glmnet", repos='http://cran.us.r-project.org')
+install.packages("pROC", repos='http://cran.us.r-project.org')
+install.packages("reshape2", repos='http://cran.us.r-project.org')
