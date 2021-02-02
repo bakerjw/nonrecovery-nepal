@@ -1,0 +1,383 @@
+---
+title: "Nonrecovery modeling Nepal"
+subtitle: 'Code to accompany paper'
+author: "[Sabine Loos](https://sabine-loos.com)"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    number_sections: true
+    theme: yeti
+    highlight: pygments
+    fig_align: center
+    df_print: paged
+    code_folding: hide
+    fig_caption: true
+---
+```{r setup, echo=F}
+# SETUP
+knitr::opts_knit$set(root.dir = normalizePath(".."))
+knitr::opts_chunk$set(warning = F, message = F, dpi = 800, fig.align = 'center')
+```
+
+# INITIALIZE CODE
+## Load packages
+```{r code initialization, message=FALSE, warning=FALSE, results='hide'}
+# remove all existing files
+rm(list = ls())
+# load packages
+packages <- c('sp', 'raster', 'ggplot2', 'dplyr', 'gridExtra', 'rasterVis', 'iml', 'ranger', 'pROC', 'reshape2')
+for (pkg in packages) {
+  require(pkg, character.only = T)
+}
+# load functions
+functions <- c('PlottingFunctions', "ice_plot", "strat_folds", "rf_train", "xtransform")
+for (fn in functions) {
+  source(file = paste0("code/functions/", fn, ".R"))
+}
+# set date
+date <- format(Sys.Date(), "%m%d%y")
+# remove extra variables
+rm(pkg, packages, fn, functions)
+```
+
+## Load data
+Load output from variable selection script
+
+Describe each dataset
+
+```{r}
+# Output from variable selection
+load("data/out/varselect_nrun_1000.RData")
+## Calculate the number of runs used for the variable selection
+nruns = nrow(BS_varselect$coef_avg_RF)
+
+# Grid of study area used for prediction
+sp.predgrid <- readRDS("data/in/pred_grid_nonrecovery.rds") ### change this to only include the final variables
+
+# Read in spatial (sp) dataframe used for building model. Data has column for y (dependent variable) and all other columns are x (ind. variable)
+sp.xydat <- readRDS(file = "C:/Users/scloo/Documents/Research Codes/nonrecovery-nepal/data/in/TAF_11dist.rds")
+```
+
+# Plot results from variable selection
+## Occurrences
+Describe variable selection process from previous script
+
+```{r}
+# Prepare occurrences dataframe
+## logistic model
+df.occ_log <- BS_varselect$coef_avg_LOG %>% mutate_all(function(x){ifelse(is.na(x), x, 1)})
+df.occ_log <- df.occ_log %>% replace(is.na(.), 0) %>% summarise_all(sum)
+## RF modeL
+df.occ_RF <- BS_varselect$coef_avg_RF %>% mutate_all(function(x){ifelse(is.na(x), x, 1)})
+df.occ_RF <- df.occ_RF %>% replace(is.na(.), 0) %>% summarise_all(sum)
+## Count occurrences of each variable across all runs
+df.occ <- data.frame(t(rbind(df.occ_log, df.occ_RF)))[-1,]/nruns
+names(df.occ) <- c("Log", "RF")
+df.occ$xvar <- rownames(df.occ)
+# sort in descending order of RF
+df.occ_melt <- reshape2::melt(df.occ, value.name = "perc_occurred")
+
+# Plot
+## color by greater than 0.75
+df.occ$fill <- "Not selected"
+df.occ$fill[df.occ$RF>=0.75] <- "Automatically selected"
+
+# change variable name
+df.occ$xvar <- c(substr(df.occ$xvar[1:32],1,nchar(as.vector(df.occ$xvar[1:32]))-3),"noise")
+df.occ <- df.occ %>% 
+  arrange(desc(RF))%>%
+  mutate(xvar = factor(xvar, levels = rev(xvar)))
+# occurence_percentage
+df.occ$RF_pct = df.occ$RF*100
+# plot  
+ggplot(df.occ,aes(xvar, RF_pct, fill = fill))+
+  geom_col()+
+  geom_hline(aes(yintercept = 75), color = "gray")+
+  coord_flip()+
+  scale_y_continuous(expand = c(0,0))+
+  labs(y = "Percent of simulations predictor is included", x = "Predictor")+
+  scale_fill_manual("",values = c("Not selected" = light, "Automatically selected" = dark)) +
+  plotThemeCoeff() + theme(legend.position = c(0.86, 0.25))
+```
+
+## Training error
+```{r}
+# make dataframe
+df.trainerror <- reshape2::melt(BS_varselect$error.train, value.name = "train_auc", variable.name = "model")
+df.trainerror$modelplot <- df.trainerror$model
+levels(df.trainerror$modelplot) <- c("Logistic regression", "Random Forest")
+# plot
+ggplot(df.trainerror, aes(x = train_auc, group = modelplot,fill = modelplot, color = modelplot))+
+  geom_histogram(alpha = 0.5, bins = 1000/20)+
+  labs(x = "Training Area Under Curve", y = "Number of simulations")+ 
+    scale_fill_manual("Model", values = c("Logistic regression" = light, "Random Forest" = dark))+
+    scale_color_manual("Model", values = c("Logistic regression" = light, "Random Forest" = dark))+
+  scale_x_continuous(expand = c(0,0), lim = c(0.5,1))+scale_y_continuous(expand = c(0,0), limits = c(0, 400))+
+  plotThemeCoeff() + theme(legend.position = c(0.25, 0.9), legend.direction = "vertical")
+
+## averages
+df.trainerror %>% group_by(model) %>% summarise(mean(train_auc))
+```
+
+# Develop nonrecovery model with most occurring variables
+- describe using RF 
+## Select variables that occurred more than 75%
+```{r}
+# random forest most occuring variables
+df.occ_RF <-sort(df.occ_RF, decreasing = T)
+ch.xvarfin_auto <- as.character(names(df.occ_RF)[df.occ_RF/1000>0.75])
+
+## get original values (untransformed, since RF doesn't require it)
+ch.xvarfin_auto <- substr(ch.xvarfin_auto,1,nchar(ch.xvarfin_auto)-3)
+## Print to screen
+ch.xvarfin_auto
+```
+
+## Remove variables with problematic relationships
+Explain which variables to remove
+- p_thatchroof
+- dry_prcdiff_2015
+- p_Dalit
+- msn_prcdiff_2015
+```{r}
+ind_rm <- which(ch.xvarfin_auto %in% c("p_thatchroof", "dry_prcdiff_2015", "p_Dalit", "msn_prcdiff_2015"))
+ch.xvarfin_automan <- ch.xvarfin_auto[-ind_rm]
+ch.xvarfin_automan
+```
+
+Standardize census variables
+```{r}
+# set xvar to standardize
+ch.xvarfin_automan[which(ch.xvarfin_automan == "p_tap")] <- "p_tap_tr"
+# transform xvar
+sp.xydat$p_tap_tr <- std(sp.xydat$p_tap)
+```
+
+## Prep dataframe
+Explain only damage, and stratifying by just recon output
+```{r}
+## Model for only damaged buildings by using only data for damaged buildings (damage_binary = 1)
+sp.xydat_dmg <- sp.xydat[which(sp.xydat$damage_binary==1),]
+
+## Stratify data by y variable (recon_binary)
+set.seed(930)
+sp.xydat_dmg$folds <- create_folds(data = sp.xydat_dmg@data,
+                              n_folds = 6, # five for training, one for test
+                              strat_cols = c("recon_binary"))$folds
+# save fold 3 as dat_test
+sp.dattest <- sp.xydat_dmg[sp.xydat_dmg$folds == 3,]
+sp.dattrain <- sp.xydat_dmg[sp.xydat_dmg$folds != 3,]
+nrow(sp.dattest)/ nrow(sp.xydat_dmg) # 16%
+```
+
+```{r, echo=FALSE}
+# plot folds
+gg.xydat_dmg <- as.data.frame(sp.xydat_dmg)
+gg.xydat_dmg$set <- "training set"
+gg.xydat_dmg$set[gg.xydat_dmg$folds == 3] <- "test set"
+gg.xydat_dmg$recon_binary_text <- "complete"
+gg.xydat_dmg$recon_binary_text[gg.xydat_dmg$recon_binary == 1] <- "not complete"
+# plot
+ggplot(data = gg.xydat_dmg) + 
+  geom_polygon(data = dist11_gg, aes(long, lat, group=group), colour = "white",fill = "snow3")+
+  geom_point(aes(x = X._GPS_longitude,y= X._GPS_latitude, colour = recon_binary_text),
+             shape = 18, size =2, alpha = 0.5)+
+  facet_wrap(facets = "set")+
+  scale_color_manual("Reconstruction completion", values = c("not complete" = dark, "complete" = light))+
+  coord_equal() + plotThemeMap() + theme(legend.position = "bottom")
+```
+
+## Train random forests model
+```{r}
+# set x, y variables and formula
+y.var <- "recon_binary"
+x.var <- ch.xvarfin_automan
+form <- as.formula(paste(y.var, paste(x.var, sep = "", collapse = " + "), sep = " ~ "))
+form
+```
+
+Explain hyperparameter tuning
+```{r}
+# tune hyperparameters
+bestparams <- rf_train(x.var = ch.xvarfin_automan, dattrain = sp.dattrain@data, impurity = F, form = form)$bestparams
+
+# build model with best params
+mod.rf <- ranger(
+    formula = form,
+    data = sp.dattrain@data,
+    num.trees = length(x.var) * 10,
+    mtry = bestparams$mtry,
+    min.node.size = bestparams$min.node.size,
+    replace = bestparams$replace,
+    sample.fraction = bestparams$sample.fraction,
+    probability = T,
+    # importance = 'impurity_corrected',
+    seed = 343
+  )
+```
+
+## Train alternative logistic regression model
+
+Logistic variables
+```{r}
+ch.xvarlog_auto <- as.character(names(df.occ_log)[df.occ_log/1000>0.75])
+# remove intercept
+ch.xvarlog_auto <- ch.xvarlog_auto[-which(ch.xvarlog_auto %in% "(Intercept)")]
+ch.xvarlog_auto <- substr(ch.xvarlog_auto,1,nchar(ch.xvarlog_auto)-3)
+ch.xvarlog_auto
+```
+
+```{r}
+y.var <- "recon_binary"
+x.var <- ch.xvarlog_auto
+
+# formula
+form <- as.formula(paste(y.var, paste(x.var, sep = "", collapse = " + "), sep = " ~ "))
+mod.log <- glm(formula = form, data = sp.dattrain@data, family = "binomial")
+```
+
+# Nonrecovery results
+## Variable relationships
+Explain.
+Also add labels to x and y
+```{r}
+x.var <- ch.xvarfin_automan
+pl <- list()
+ch.xvarlab <- data.frame(xvar_fin = ch.xvarfin_automan, 
+                       xlab = c("Shaking Intensity (MMI)", 
+                                "Tree cover (%)",
+                                "Population density (People/km2)",
+                                "Remoteness (hours to municipal)",
+                                "Landslide hazard index", 
+                                "Tap water (%, standardized)", 
+                                "Slope (degrees)",  
+                                "Food poverty prevalence (%)"))
+transform_vars <- c("popn2015_wp","remoteMunic")
+for (i in 1:length(x.var)) {
+  if(x.var[i] %in% transform_vars){
+    ice <- ice.plot(icevar = x.var[i],
+         data = sp.dattrain@data, 
+         xvar = x.var, 
+         yvar = "recon_binary",
+         modeltype = "RF",
+         model = mod.rf,
+         transform_x = T,
+         truncate = T,
+         col_pal = c(dark,light),
+         ylab = "",
+         xlab = as.character(sp.dattrain$xlab[sp.dattrain$xvar_fin == x.var[i]]),
+         ylim = c(-0.2, 0.61))
+  }else{
+    ice <- ice.plot(icevar = x.var[i],
+         data = sp.dattrain@data, 
+         xvar = x.var, 
+         yvar = "recon_binary",
+         modeltype = "RF",
+         model = mod.rf,
+         truncate = T,
+         col_pal = c(dark,light),
+         ylab = "",
+         xlab = as.character(sp.dattrain$xlab[sp.dattrain$xvar_fin == x.var[i]]),
+         ylim = c(-0.2, 0.61))
+  }
+  
+  if(i %in% c(1,5)){
+    pl[[(i)]] <- ice$plot+theme(axis.title.y = element_blank())
+  }else{
+    pl[[(i)]] <- ice$plot+theme(axis.title.y = element_blank(), axis.text.y = element_blank())
+  }
+}
+```
+
+```{r}
+grid.arrange(grobs = lapply(pl, "+", theme(plot.margin = unit(c(5,5,5,5), "points"))), ncol = 4, nrow = 2)
+```
+
+## Spatial distribution of nonrecovery
+
+```{r}
+# transform one variable
+sp.predgrid$p_tap_tr <- std(sp.predgrid$p_tap)
+
+# predict
+num.modpred <- predict(mod.rf, data = sp.predgrid@data, type = "response")
+summary(ranger::predictions(num.modpred))
+
+sp.predgrid$modRF_pred_complete <- NA
+sp.predgrid$modRF_pred_complete <- num.modpred$predictions[,"0"] # complete
+
+sp.predgrid$modRF_pred_notcomplete <- NA
+sp.predgrid$modRF_pred_notcomplete <- num.modpred$predictions[,"1"] # not complete
+```
+
+```{r}
+# prep data
+gridded(sp.predgrid)=T # turn into spatial pixels
+rast.predgrid <- raster::stack(sp.predgrid[which(!is.na(sp.predgrid$GRID_ID2)),])
+# dattrain_gg
+gg.dattrain <- as.data.frame(sp.dattrain)
+names(gg.dattrain)[which(names(gg.dattrain)%in% c("X._GPS_longitude", "X._GPS_latitude"))] <- c("coords.x1", "coords.x2")
+breaks = round(quantile(sp.predgrid$modRF_pred_notcomplete, na.rm =T, probs = seq(0,1, 0.25)),digits = 1)
+breaks = as.numeric(breaks)
+vals = scale_01(breaks)
+p <- plot_raster_nepal(raster = rast.predgrid$modRF_pred_notcomplete, col_pal = warmpal(24),
+                  legend_title = "Probability of non-recovery",
+                  scale_legend = T,
+                  legend_lims = breaks,
+                  draw_kathmandu = F,
+                  legend_vals = vals,
+                  draw_field = F, 
+                  base_size = 10) +
+  theme(legend.key.width = unit(18, "pt"))
+p
+```
+
+## Test error
+
+Predict on test set
+```{r}
+# Random forest
+num.modpred <- predict(mod.rf, data = sp.dattest@data, type = "response")
+sp.dattest$modRF_pred_notcomplete <- NA
+sp.dattest$modRF_pred_notcomplete <- num.modpred$predictions[,2]
+## AUC predictions
+roc.dattestRF <- pROC::roc(response = sp.dattest$recon_binary, 
+                              predictor = sp.dattest$modRF_pred_notcomplete,
+                              levels = c("0", "1"), # values for controls (0) and cases (1), respectively
+                              direction = ">",
+                              auc = T)
+
+# Logistic
+sp.dattest$modLog_pred_notcomplete <- as.vector(predict(mod.log, newdata = sp.dattest@data, type = "response", na.action = na.pass))
+# AUC predictions
+roc.dattestLog <- pROC::roc(response = sp.dattest$recon_binary, 
+                              predictor = sp.dattest$modLog_pred_notcomplete,
+                              levels = c("0", "1"),
+                              direction = ">",
+                              auc = T)
+```
+
+
+```{r}
+# turn into dataframe
+dat.ROC <- rbind(data.frame(TNR = roc.dattestRF$specificities, TPR = roc.dattestRF$sensitivities, model = "Random Forest"),
+                  data.frame(TNR = roc.dattestLog$specificities, TPR = roc.dattestLog$sensitivities, model = "Logistic Regression"))
+dat.ROC$FPR = (1-dat.ROC$TNR)
+
+dat.AUC <- data.frame(TNR = c(0.6, 0.3), TPR = c(0.875,0.575), 
+                      model = c("Random Forest", "Logistic Regression"),
+                       AUC = paste("AUC =",round(c(roc.dattestRF$auc, roc.dattestLog$auc), digits = 3)))
+# plot roc curve
+ggplot(dat.ROC, aes(x = TNR, y = TPR, color = model)) + geom_line()+
+  labs(x = "True Negative Rate", y = "True Positive Rate")+
+  geom_text(data = dat.AUC, aes(label = AUC))+
+  scale_color_manual(values = c("Random Forest"=dark, "Logistic Regression" = light))+
+  plotThemeCoeff(base_size = 12)+ theme(legend.position = c(0.25,0.25), legend.title = element_blank())
+```
+
+
+
+
