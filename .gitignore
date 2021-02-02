@@ -37,3 +37,6 @@ vignettes/*.pdf
 
 # R Environment Variables
 .Renviron
+Nature-Paper/
+data/in/TAF_11dist.rds
+data/in/pred_grid_cp_092520.rds
