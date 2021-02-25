@@ -4,7 +4,8 @@ This repository contains the source code and *some* of the data to replicate key
 
 *<u>insert paper citation*</u>
 
-To cite this data and software, please use the following DOI: https://zenodo.org/badge/305008490.svg
+To cite this data and software, please use the following DOI: 
+[![DOI](https://zenodo.org/badge/305008490.svg)](https://zenodo.org/badge/latestdoi/305008490)
 
 ## Licensing and availability
 
