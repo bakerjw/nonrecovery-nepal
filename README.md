@@ -2,14 +2,14 @@
 
 This repository contains the source code and *some* of the data to replicate key results from the following paper:
 
-*<u>insert paper citation*</u>
+Loos S, Lallemant D, Khan F, McCaughey JW, Banick R, Budhathoki N, Baker JW (2023) A data-driven approach to rapidly estimate recovery potential to go beyond building damage after disasters. Communications Earth & Environment, 4(1):1–12. https://doi.org/10.1038/s43247-023-00699-4
 
 To cite this data and software, please use the following DOI: 
 [![DOI](https://zenodo.org/badge/305008490.svg)](https://zenodo.org/badge/latestdoi/305008490)
 
 ## Licensing and availability
 
-The code and the data are both licensed under the CC-by-NC-SA license. Feel free to use either based on the terms and conditions listed in the LICENSE.md file in the code and data's respective folders and reference the above paper. We intend this code to be used for NON-COMMERCIAL uses, if you'd like to use either for commercial uses, please contact Sabine Loos at  [sloos@alumni.stanford.edu](mailto::sloos@alumni.stanford.edu).
+The code and the data are both licensed under the CC-by-NC-SA license. Feel free to use either based on the terms and conditions listed in the LICENSE.md file in the code and data's respective folders and reference the above paper. We intend this code to be used for NON-COMMERCIAL uses, if you'd like to use either for commercial uses, please contact Sabine Loos at  [sloos@umich.edu](mailto::sloos@umich.edu).
 
 ### Data availability
 
